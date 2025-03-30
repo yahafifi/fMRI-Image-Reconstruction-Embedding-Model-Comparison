@@ -1,0 +1,36 @@
+# requirements.txt
+
+# --- Core ML / Deep Learning ---
+torch
+torchvision
+# torchaudio # (Included in user's install but not used in refactored code, optional)
+transformers
+accelerate # Often needed by transformers and diffusers
+
+# --- fMRI/Neuroimaging Data Handling ---
+bdpy
+nibabel
+h5py # For HDF5 file format (.h5)
+mat73 # For newer MATLAB .mat file versions
+hdf5storage # Alternative/complementary for .mat files
+
+# --- Image Generation ---
+diffusers
+
+# --- Evaluation Metrics ---
+scikit-image # For SSIM
+lpips
+open_clip_torch # For CLIP-based similarity scoring
+
+# --- CLIP Model ---
+clip @ git+https://github.com/openai/CLIP.git
+
+# --- Standard Data Science & Utility ---
+numpy
+pandas
+scikit-learn
+matplotlib
+Pillow # PIL Fork for image manipulation
+requests # For downloading data
+tqdm # Progress bars
+scipy # Scientific computing library
