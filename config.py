@@ -65,12 +65,20 @@ NUM_WORKERS = 2
 # --- Mapping Model (Ridge Regression) ---
 RIDGE_ALPHA = 1000.0
 RIDGE_MAX_ITER = 5000
-# --- Suggestion: Add MLP config here later ---
-# MLP_HIDDEN_DIMS = [2048, 2048]
-# MLP_LEARNING_RATE = 1e-4
-# MLP_EPOCHS = 50
-# MLP_WEIGHT_DECAY = 1e-3
-# MLP_DROPOUT = 0.5
+# --- Mapping Model (MLP) ---
+# Replaces Ridge settings
+MAPPING_MODEL_TYPE = "mlp"  # Can be 'mlp' or 'ridge' (for fallback/comparison later)
+
+MLP_HIDDEN_LAYERS = [4096, 4096] # List of hidden layer sizes. Example: 2 layers of 4096 neurons
+MLP_ACTIVATION = "relu"       # Activation function ('relu', 'gelu', etc.)
+MLP_DROPOUT_RATE = 0.3        # Dropout rate for hidden layers
+MLP_LEARNING_RATE = 1e-4      # Initial learning rate for AdamW
+MLP_WEIGHT_DECAY = 1e-3       # Weight decay for AdamW optimizer
+MLP_EPOCHS = 100              # Number of training epochs
+MLP_BATCH_SIZE = 128          # Batch size specifically for MLP training
+MLP_PATIENCE = 10             # Epochs for early stopping if no improvement on validation loss
+MLP_LR_FACTOR = 0.1           # Factor to reduce learning rate on plateau
+MLP_LR_PATIENCE = 5           # Epochs to wait before reducing learning rate
 
 
 # --- Retrieval (k-NN) ---
