@@ -110,65 +110,116 @@ def main(args):
         return
 
     # --- 4. Train/Load Mapping Model (fMRI -> Embedding) ---
-    print(f"\n--- Training/Loading Ridge Mapping Model ({model_name}) ---")
-    ridge_model_filename = os.path.join(config.MODELS_BASE_PATH, f"ridge_mapping_{model_name}_alpha{config.RIDGE_ALPHA}.sav")
+    print(f"\n--- Training/Loading {MAPPING_MODEL_TYPE.upper()} Mapping Model ({model_name}) ---")
+    
+    mapping_model = None
+    fmri_scaler = None # Only used by MLP
+    
+    if MAPPING_MODEL_TYPE == "ridge":
+        ridge_model_filename = os.path.join(config.MODELS_BASE_PATH, f"ridge_mapping_{model_name}_alpha{config.RIDGE_ALPHA}.sav")
+        if args.force_retrain or not os.path.exists(ridge_model_filename):
+            if X_train is None or Z_train is None: raise ValueError("Training data missing for Ridge.")
+            try:
+                # Assuming train_ridge_mapping now saves {'model': ..., 'scaler': None}
+                # And load_ridge_model returns only the model object
+                mapping_model, _ = mapping_models.train_ridge_mapping(
+                    X_train, Z_train, config.RIDGE_ALPHA, config.RIDGE_MAX_ITER, model_name
+                )
+            except Exception as e: print(f"Error training Ridge model: {e}"); raise # Stop if training fails
+        else:
+            try: mapping_model = mapping_models.load_ridge_model(ridge_model_filename)
+            except Exception as e: print(f"Error loading Ridge model: {e}"); raise
+    
+    elif MAPPING_MODEL_TYPE == "mlp":
+        mlp_model_filename = os.path.join(config.MODELS_BASE_PATH, f"mlp_mapping_{model_name}_best.pt")
+        mlp_scaler_filename = os.path.join(config.MODELS_BASE_PATH, f"mlp_scaler_{model_name}.sav")
+        if args.force_retrain or not os.path.exists(mlp_model_filename) or not os.path.exists(mlp_scaler_filename):
+             if X_train is None or Z_train is None or X_val is None or Z_val is None:
+                 raise ValueError("Training/Validation data missing for MLP.")
+             try:
+                 # Need embedding_dim which depends on the model_name
+                 embedding_dim = config.EMBEDDING_MODELS[model_name]['embedding_dim']
+                 mapping_model, fmri_scaler, _ = mapping_models.train_mlp_mapping(
+                     X_train, Z_train, X_val, Z_val, model_name, embedding_dim
+                 )
+             except Exception as e: print(f"Error training MLP model: {e}"); raise
+        else:
+            try:
+                # Need input_dim (n_voxels) and embedding_dim to load architecture
+                n_voxels = X_train.shape[1] # Get from loaded data
+                embedding_dim = config.EMBEDDING_MODELS[model_name]['embedding_dim']
+                mapping_model, fmri_scaler = mapping_models.load_mlp_model(model_name, embedding_dim, n_voxels)
+            except Exception as e: print(f"Error loading MLP model: {e}"); raise
+    
+    if mapping_model is None:
+        print("ERROR: Failed to train or load the mapping model. Exiting.")
+        return # Exit if no model is available
 
-    if args.force_retrain or not os.path.exists(ridge_model_filename):
-        try:
-            ridge_model, _ = mapping_models.train_ridge_mapping(
-                X_train, Z_train, config.RIDGE_ALPHA, config.RIDGE_MAX_ITER, model_name
-            )
-        except Exception as e:
-            print(f"Error training Ridge model: {e}")
-            return
-    else:
-        try:
-            ridge_model = mapping_models.load_ridge_model(ridge_model_filename)
-        except Exception as e:
-            print(f"Error loading Ridge model: {e}")
-            # Optionally fallback to training
-            # print("Attempting to train Ridge model instead...")
-            # ridge_model, _ = mapping_models.train_ridge_mapping(...)
-            return
 
     # --- 5. Predict Embeddings from Test fMRI ---
-    print(f"\n--- Predicting Test Embeddings from fMRI ({model_name}) ---")
-    try:
-        Z_test_avg_pred = mapping_models.predict_embeddings(ridge_model, X_test_avg)
-
-        # Evaluate the embedding prediction quality (optional but good)
-        print("Evaluating embedding prediction performance (RMSE, R2):")
-        pred_rmse, pred_r2 = mapping_models.evaluate_prediction(Z_test_avg_true, Z_test_avg_pred)
-        # Store these intermediate results if needed
-        prediction_metrics = {'rmse': pred_rmse, 'r2': pred_r2}
-
-        # --- Suggestion: Standardization Step from Original Code ---
-        # This step adjusted predicted values based on training set stats.
-        # It can sometimes help if there's a domain shift or scaling issue.
-        # Let's include it as an option or default based on original code.
-        print("Applying standardization adjustment to predicted embeddings...")
-        epsilon = 1e-10
-        train_mean = np.mean(Z_train, axis=0)
-        train_std = np.std(Z_train, axis=0)
-        pred_mean = np.mean(Z_test_avg_pred, axis=0)
-        pred_std = np.std(Z_test_avg_pred, axis=0)
-
-        Z_test_avg_pred_adj = ((Z_test_avg_pred - pred_mean) / (pred_std + epsilon)) * train_std + train_mean
-        print("Standardization complete.")
-
-        # Evaluate adjusted predictions too
-        print("Evaluating ADJUSTED embedding prediction performance (RMSE, R2):")
-        adj_pred_rmse, adj_pred_r2 = mapping_models.evaluate_prediction(Z_test_avg_true, Z_test_avg_pred_adj)
-        prediction_metrics['rmse_adj'] = adj_pred_rmse
-        prediction_metrics['r2_adj'] = adj_pred_r2
-
-        # --- Choose which predicted embeddings to use for retrieval ---
-        # Using the adjusted ones based on original code's likely intent
-        query_embeddings = Z_test_avg_pred_adj
-        print("Using *adjusted* predicted embeddings for retrieval.")
-
-    except Exception as e:
-        print(f"Error during embedding prediction or evaluation: {e}")
+    print(f"\n--- Predicting Test Embeddings using {MAPPING_MODEL_TYPE.upper()} ({model_name}) ---")
+    Z_test_avg_pred = None
+    query_embeddings = None # This will hold the final embeddings used for retrieval
+    prediction_metrics = {} # Store metrics like RMSE, R2, CosSim
+    
+    if X_test_avg is None:
+         print("ERROR: Test fMRI data (X_test_avg) is missing. Cannot predict.")
+    elif mapping_model is None:
+         print("ERROR: Mapping model not loaded/trained. Cannot predict.")
+    else:
+        try:
+            if MAPPING_MODEL_TYPE == "ridge":
+                Z_test_avg_pred = mapping_models.predict_embeddings_ridge(mapping_model, X_test_avg)
+            elif MAPPING_MODEL_TYPE == "mlp":
+                # Ensure scaler was loaded/trained
+                if fmri_scaler is None: raise ValueError("MLP scaler not available for prediction.")
+                Z_test_avg_pred = mapping_models.predict_embeddings_mlp(mapping_model, fmri_scaler, X_test_avg)
+    
+            # Evaluate the raw prediction quality (Important!)
+            print("\nEvaluating RAW embedding prediction performance:")
+            # Use the updated evaluate_embedding_prediction function
+            pred_rmse, pred_r2, pred_cos_sim = mapping_models.evaluate_embedding_prediction(Z_test_avg_true, Z_test_avg_pred)
+            prediction_metrics['raw_rmse'] = pred_rmse
+            prediction_metrics['raw_r2'] = pred_r2
+            prediction_metrics['raw_cos_sim'] = pred_cos_sim
+    
+            # --- Standardization Step (Optional but Recommended) ---
+            # Let's keep this adjustment step for now as it might help both models
+            print("\nApplying standardization adjustment to predicted embeddings...")
+            epsilon = 1e-10
+            # Use Z_train stats for adjustment (Make sure Z_train exists)
+            if Z_train is not None and Z_train.size > 0:
+                train_mean = np.mean(Z_train, axis=0)
+                train_std = np.std(Z_train, axis=0)
+                pred_mean = np.mean(Z_test_avg_pred, axis=0)
+                pred_std = np.std(Z_test_avg_pred, axis=0)
+    
+                Z_test_avg_pred_adj = ((Z_test_avg_pred - pred_mean) / (pred_std + epsilon)) * train_std + train_mean
+                print("Standardization complete.")
+    
+                # Evaluate adjusted predictions too
+                print("\nEvaluating ADJUSTED embedding prediction performance:")
+                adj_pred_rmse, adj_pred_r2, adj_pred_cos_sim = mapping_models.evaluate_embedding_prediction(Z_test_avg_true, Z_test_avg_pred_adj)
+                prediction_metrics['adj_rmse'] = adj_pred_rmse
+                prediction_metrics['adj_r2'] = adj_pred_r2
+                prediction_metrics['adj_cos_sim'] = adj_pred_cos_sim
+    
+                # --- Choose which predicted embeddings to use for retrieval ---
+                query_embeddings = Z_test_avg_pred_adj # Use adjusted ones
+                print("\nUsing *adjusted* predicted embeddings for retrieval.")
+            else:
+                print("WARNING: Z_train not available for standardization. Using RAW predictions for retrieval.")
+                query_embeddings = Z_test_avg_pred # Fallback to raw predictions
+    
+        except Exception as e:
+            print(f"Error during embedding prediction or evaluation: {e}")
+            import traceback
+            traceback.print_exc()
+            # Decide whether to stop or continue without query_embeddings
+    
+    # Ensure query_embeddings is defined before proceeding
+    if query_embeddings is None:
+        print("ERROR: Query embeddings could not be generated. Stopping.")
         return
 
     # --- 6. Precompute/Load Tiny ImageNet Features & Train/Load k-NN ---
@@ -315,9 +366,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name",
         type=str,
-        required=True,
-        choices=list(config.EMBEDDING_MODELS.keys()),
-        help="Name of the visual embedding model to use."
+        default="ridge", # Default to ridge for backward compatibility
+        choices=["ridge", "mlp"],
+        help="Type of mapping model to use (ridge or mlp)."
     )
     parser.add_argument(
         "--download",
@@ -336,6 +387,7 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    MAPPING_MODEL_TYPE = args.mapping_model # Use this variable later
     main(args)
 
     # Example usage from command line:
