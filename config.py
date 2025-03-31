@@ -11,6 +11,7 @@ OUTPUT_BASE_PATH = os.path.join(KAGGLE_BASE_PATH, 'output')
 
 # GOD Dataset Paths
 GOD_FMRI_PATH = os.path.join(DATA_BASE_PATH, 'GOD')
+GOD_FMRI_FILE_PATH = '/kaggle/working/data/fMRI/GOD/Subject3.h5'
 GOD_IMAGENET_PATH = os.path.join(DATA_BASE_PATH, 'imagenet/images') # Contains train/test stimuli for GOD
 GOD_FEATURES_PATH = os.path.join(DATA_BASE_PATH, 'imagenet/features') # Precomputed features if needed
 
@@ -61,6 +62,14 @@ NUM_WORKERS = 2
 # --- Mapping Model (Ridge Regression) ---
 RIDGE_ALPHA = 1000.0
 RIDGE_MAX_ITER = 5000
+# MLP Config (moved from mapping_models.py for consistency)
+MLP_HIDDEN_LAYERS = [2048, 2048]
+MLP_DROPOUT_RATE = 0.3
+MLP_LEARNING_RATE = 1e-4
+MLP_WEIGHT_DECAY = 1e-5
+MLP_EPOCHS = 100
+MLP_BATCH_SIZE = 64
+MLP_EARLY_STOPPING_PATIENCE = 10
 
 # --- Retrieval (k-NN) ---
 KNN_N_NEIGHBORS = 5
