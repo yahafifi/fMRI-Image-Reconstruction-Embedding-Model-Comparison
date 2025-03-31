@@ -31,7 +31,7 @@
  DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
  
  # --- Data Handling ---
- SUBJECT_ID = "3" # Subject for GOD dataset
+ SUBJECT_ID = "1" # Subject for GOD dataset
  ROI = "ROI_VC" # Region of Interest
  TEST_SPLIT_SIZE = 0.1
  RANDOM_STATE = 42
