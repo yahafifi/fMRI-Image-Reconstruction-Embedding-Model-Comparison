@@ -23,7 +23,7 @@ def evaluate_prediction(Z_true, Z_pred, dataset_name="Test"):
     if Z_true is None or Z_pred is None:
         print(f"Warning: Cannot evaluate prediction for {dataset_name} - data is None.")
         return np.nan, np.nan
-        
+
     if isinstance(Z_true, torch.Tensor):
         Z_true = Z_true.detach().cpu().numpy()
     if isinstance(Z_pred, torch.Tensor):
@@ -55,7 +55,7 @@ def evaluate_prediction(Z_true, Z_pred, dataset_name="Test"):
     if Z_true.size == 0 or Z_pred.size == 0:
         print(f"Warning: Cannot evaluate prediction for {dataset_name} - data arrays are empty.")
         return np.nan, np.nan
-        
+
     try:
         mse = mean_squared_error(Z_true, Z_pred)
         rmse = np.sqrt(mse)
@@ -82,6 +82,8 @@ def evaluate_prediction(Z_true, Z_pred, dataset_name="Test"):
 class FmriMappingMLP(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_layers, activation='relu', dropout_rate=0.5):
         super().__init__()
+        # Add a print statement to show the dimensions being used
+        print(f"Initializing FmriMappingMLP: Input={input_dim}, Output={output_dim}")
         layers = []
         last_dim = input_dim
 
@@ -149,7 +151,7 @@ def train_mlp_mapping(X_train, Z_train, X_val, Z_val, model_name, fmri_model_nam
 
     device = config.DEVICE
     input_dim = X_train.shape[1]
-    output_dim = Z_train.shape[1]
+    output_dim = Z_train.shape[1] # Target dimension (can be full embedding or PCA)
 
     # Create datasets and dataloaders
     try:
@@ -157,6 +159,7 @@ def train_mlp_mapping(X_train, Z_train, X_val, Z_val, model_name, fmri_model_nam
         train_loader = DataLoader(train_dataset, batch_size=config.MLP_BATCH_SIZE, shuffle=True, num_workers=config.NUM_WORKERS, pin_memory=(device != torch.device('cpu')))
     except Exception as e:
         print(f"Error creating training dataset/loader: {e}")
+        traceback.print_exc()
         return None, None
 
     val_loader = None
@@ -167,6 +170,7 @@ def train_mlp_mapping(X_train, Z_train, X_val, Z_val, model_name, fmri_model_nam
              print(f"Training with {len(train_dataset)} samples, Validating with {len(val_dataset)} samples.")
         except Exception as e:
              print(f"Error creating validation dataset/loader: {e}")
+             traceback.print_exc()
              val_loader = None # Proceed without validation if it fails
              print(f"Training with {len(train_dataset)} samples. Validation loader creation failed.")
     else:
@@ -177,13 +181,14 @@ def train_mlp_mapping(X_train, Z_train, X_val, Z_val, model_name, fmri_model_nam
     try:
         model = FmriMappingMLP(
             input_dim=input_dim,
-            output_dim=output_dim,
+            output_dim=output_dim, # Use target dimension
             hidden_layers=config.MLP_HIDDEN_LAYERS,
             activation=config.MLP_ACTIVATION,
             dropout_rate=config.MLP_DROPOUT_RATE
         ).to(device)
     except Exception as e:
         print(f"Error initializing MLP model: {e}")
+        traceback.print_exc()
         return None, None
 
     criterion = nn.MSELoss()
@@ -202,6 +207,7 @@ def train_mlp_mapping(X_train, Z_train, X_val, Z_val, model_name, fmri_model_nam
         epoch_start_time = time.time()
         model.train()
         running_loss = 0.0
+        batch_count = 0
         for i, (fmri_batch, embed_batch) in enumerate(train_loader):
             fmri_batch = fmri_batch.to(device)
             embed_batch = embed_batch.to(device)
@@ -213,15 +219,14 @@ def train_mlp_mapping(X_train, Z_train, X_val, Z_val, model_name, fmri_model_nam
             # Check for NaN loss
             if torch.isnan(loss):
                  print(f"ERROR: NaN loss detected at epoch {epoch+1}, batch {i+1}. Stopping training.")
-                 # Potentially return the model state before NaN occurred if desired
-                 # For now, return None to indicate failure
-                 return None, None
+                 return None, None # Indicate failure
 
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
+            batch_count += 1
 
-        avg_train_loss = running_loss / len(train_loader)
+        avg_train_loss = running_loss / batch_count if batch_count > 0 else 0
         history['train_loss'].append(avg_train_loss)
 
         # Validation step
@@ -229,6 +234,7 @@ def train_mlp_mapping(X_train, Z_train, X_val, Z_val, model_name, fmri_model_nam
         if val_loader:
             model.eval()
             val_loss = 0.0
+            val_batch_count = 0
             with torch.no_grad():
                 for fmri_batch_val, embed_batch_val in val_loader:
                     fmri_batch_val = fmri_batch_val.to(device)
@@ -237,14 +243,13 @@ def train_mlp_mapping(X_train, Z_train, X_val, Z_val, model_name, fmri_model_nam
                     loss_val = criterion(outputs_val, embed_batch_val)
                     if torch.isnan(loss_val):
                          print(f"Warning: NaN detected in validation loss at epoch {epoch+1}. Skipping validation loss update.")
-                         # Handle NaN in validation loss - maybe use previous loss for scheduler/early stopping?
-                         # For now, we won't update avg_val_loss if NaN occurs.
                     else:
                         val_loss += loss_val.item()
+                        val_batch_count += 1
 
-            # Avoid division by zero if val_loader is empty (shouldn't happen with checks above, but safety)
-            if len(val_loader) > 0 and not np.isnan(val_loss): # Check if val_loss calculation resulted in NaN
-                avg_val_loss = val_loss / len(val_loader)
+            # Avoid division by zero if val_loader is empty or all batches had NaN
+            if val_batch_count > 0:
+                avg_val_loss = val_loss / val_batch_count
                 history['val_loss'].append(avg_val_loss)
 
                 # Reduce LR on plateau using calculated avg_val_loss
@@ -264,12 +269,12 @@ def train_mlp_mapping(X_train, Z_train, X_val, Z_val, model_name, fmri_model_nam
                 if epochs_no_improve >= config.MLP_PATIENCE:
                     print(f"Early stopping triggered after {epoch+1} epochs.")
                     break
-            else:
+            else: # Validation failed (NaN or empty)
                  history['val_loss'].append(np.nan) # Record NaN if validation failed
                  print(f"Epoch {epoch+1}: Validation step skipped or resulted in NaN.")
                  # Cannot check for best model or early stopping without valid val_loss
-                 # Save current model state as a fallback?
-                 best_model_state = copy.deepcopy(model.state_dict())
+                 # Save current model state as a fallback? Might not be desirable.
+                 # best_model_state = copy.deepcopy(model.state_dict())
 
         else: # No validation loader
              history['val_loss'].append(np.nan)
@@ -286,7 +291,7 @@ def train_mlp_mapping(X_train, Z_train, X_val, Z_val, model_name, fmri_model_nam
     final_val_rmse = np.nan
     final_val_r2 = np.nan
 
-    # Load the best model state found during training
+    # Load the best model state found during training (if any)
     if best_model_state:
         model.load_state_dict(best_model_state)
         print(f"Loaded best model state with validation loss: {best_val_loss:.6f}")
@@ -312,21 +317,39 @@ def train_mlp_mapping(X_train, Z_train, X_val, Z_val, model_name, fmri_model_nam
                     final_val_rmse, final_val_r2 = evaluate_prediction(Z_val_true_final, Z_val_pred_final, dataset_name="Validation")
                 except Exception as eval_e:
                     print(f"Error evaluating best model on validation set: {eval_e}")
+                    traceback.print_exc()
             else:
                  print("No predictions collected for final validation evaluation.")
-    else:
-         print("Warning: No best model state found (possibly no validation or training failed early). Using final model state.")
-         # You might want to evaluate the final model state on validation here if needed
+        else:
+             print("No validation loader available to evaluate the final model.")
 
-    # Save the trained model state dictionary
-    model_filename = os.path.join(config.MODELS_BASE_PATH, f"mlp_mapping_{fmri_model_name}_{model_name}.pt")
+    elif not val_loader:
+         print("Training finished without validation. Using final model state.")
+         # best_model_state will contain the state from the last epoch if no validation
+         if best_model_state:
+              model.load_state_dict(best_model_state)
+         else:
+              print("Warning: No model state available after training.")
+              return None, None # Cannot proceed without a model state
+
+    else: # Validation loader existed, but no best_model_state (e.g., NaN errors early)
+         print("Warning: No best model state found (e.g., NaN loss during training/validation). Cannot save or return a reliable model.")
+         return None, None
+
+
+    # Save the trained model state dictionary (using the loaded best state)
+    # Determine filename suffix based on PCA config (handled in run_experiment now)
+    # Here we just use the passed names for the filename core
+    pca_suffix = f"_pca{config.PCA_N_COMPONENTS}" if config.USE_PCA_TARGET else ""
+    model_filename = os.path.join(config.MODELS_BASE_PATH, f"mlp_mapping_{fmri_model_name}_{model_name}{pca_suffix}.pt")
+
     try:
         os.makedirs(config.MODELS_BASE_PATH, exist_ok=True)
         # Save model state dict, input/output dims, and maybe config used
         save_dict = {
             'model_state_dict': model.state_dict(), # Save the best state loaded above
             'input_dim': input_dim,
-            'output_dim': output_dim,
+            'output_dim': output_dim, # Save the actual output dimension used
             'hidden_layers': config.MLP_HIDDEN_LAYERS,
             'activation': config.MLP_ACTIVATION,
             'dropout_rate': config.MLP_DROPOUT_RATE,
@@ -339,6 +362,7 @@ def train_mlp_mapping(X_train, Z_train, X_val, Z_val, model_name, fmri_model_nam
         print(f"Saved trained MLP model to: {model_filename}")
     except Exception as e:
         print(f"Error saving MLP model: {e}")
+        traceback.print_exc()
         model_filename = None # Indicate saving failed
 
     total_train_time = time.time() - start_train_time
@@ -359,13 +383,19 @@ def load_mlp_model(model_filename, device=config.DEVICE):
         print(f"Loading MLP model from: {model_filename}")
         checkpoint = torch.load(model_filename, map_location=device)
 
+        # Check for essential keys
+        required_keys = ['input_dim', 'output_dim', 'hidden_layers', 'model_state_dict']
+        if not all(key in checkpoint for key in required_keys):
+             raise KeyError(f"Checkpoint file {model_filename} missing required keys.")
+
         # Recreate model architecture using saved hyperparameters
         model = FmriMappingMLP(
             input_dim=checkpoint['input_dim'],
             output_dim=checkpoint['output_dim'],
             hidden_layers=checkpoint['hidden_layers'],
-            activation=checkpoint.get('activation', config.MLP_ACTIVATION), # Use saved or default
-            dropout_rate=checkpoint.get('dropout_rate', config.MLP_DROPOUT_RATE) # Use saved or default
+            # Use saved activation/dropout, fall back to config defaults if missing (older saves)
+            activation=checkpoint.get('activation', config.MLP_ACTIVATION),
+            dropout_rate=checkpoint.get('dropout_rate', config.MLP_DROPOUT_RATE)
         ).to(device)
 
         # Load state dictionary
@@ -394,8 +424,15 @@ def predict_embeddings_mlp(mlp_model, X_data, device=config.DEVICE, batch_size=c
 
     # Convert numpy data to tensor
     if isinstance(X_data, np.ndarray):
+        # Handle empty array case
+        if X_data.size == 0:
+             print("Warning: Input data for MLP prediction is empty.")
+             return np.array([]) # Return empty numpy array
         X_tensor = torch.tensor(X_data, dtype=torch.float32)
     elif isinstance(X_data, torch.Tensor):
+        if X_data.numel() == 0:
+             print("Warning: Input tensor for MLP prediction is empty.")
+             return np.array([])
         X_tensor = X_data.float() # Ensure correct type
     else:
         print("Error: Input data must be a numpy array or torch tensor.")
@@ -403,21 +440,46 @@ def predict_embeddings_mlp(mlp_model, X_data, device=config.DEVICE, batch_size=c
 
     print(f"Predicting embeddings for {X_tensor.shape[0]} samples using MLP (Batch Size: {batch_size})...")
     all_preds = []
-    
+
     # Create a simple dataloader for prediction batches
-    pred_dataset = torch.utils.data.TensorDataset(X_tensor)
-    pred_loader = DataLoader(pred_dataset, batch_size=batch_size, shuffle=False)
+    try:
+        # Handle potential empty tensor for dataset creation
+        if X_tensor.shape[0] == 0:
+             print("Input tensor has 0 samples, returning empty prediction.")
+             return np.array([])
+             
+        pred_dataset = torch.utils.data.TensorDataset(X_tensor)
+        pred_loader = DataLoader(pred_dataset, batch_size=batch_size, shuffle=False)
+    except Exception as e:
+        print(f"Error creating prediction dataloader: {e}")
+        return None
+
 
     try:
         for batch_tensors in pred_loader:
+            # Ensure batch_tensors is not empty and is indexable
+            if not batch_tensors: continue
             batch_data = batch_tensors[0].to(device) # Get data from tuple and move to device
+            if batch_data.numel() == 0: continue # Skip empty batches
+
             batch_preds = mlp_model(batch_data)
             all_preds.append(batch_preds.cpu()) # Collect predictions on CPU
+
+        # Handle case where no predictions were made (e.g., all input batches were empty)
+        if not all_preds:
+             print("Warning: No predictions were generated.")
+             # Determine expected output shape
+             try:
+                 output_dim = mlp_model.network[-1].out_features
+                 return np.empty((0, output_dim), dtype=np.float32)
+             except Exception:
+                 return np.array([]) # Fallback
+
 
         Z_pred_tensor = torch.cat(all_preds, dim=0)
 
     except Exception as e:
-        print(f"Error during MLP prediction: {e}")
+        print(f"Error during MLP prediction loop: {e}")
         traceback.print_exc()
         return None
 
@@ -432,6 +494,9 @@ def train_ridge_mapping(X_train, Z_train, alpha, max_iter, model_name, fmri_mode
     print(f"--- Starting Ridge Training for {fmri_model_name} -> {model_name} ---")
     start_train_time = time.time()
     try:
+        if X_train.size == 0 or Z_train.size == 0:
+             raise ValueError("Ridge training requires non-empty X_train and Z_train.")
+             
         ridge = Ridge(alpha=alpha, max_iter=max_iter, random_state=config.RANDOM_STATE)
         print(f"Fitting Ridge model (alpha={alpha})...")
         ridge.fit(X_train, Z_train)
@@ -443,7 +508,8 @@ def train_ridge_mapping(X_train, Z_train, alpha, max_iter, model_name, fmri_mode
         print(f"Ridge training complete. Train RMSE: {train_rmse:.4f}, Train R2: {train_r2:.4f}")
 
         # Save the trained model
-        model_filename = os.path.join(config.MODELS_BASE_PATH, f"ridge_mapping_{fmri_model_name}_{model_name}_alpha{alpha}.sav")
+        pca_suffix = f"_pca{config.PCA_N_COMPONENTS}" if config.USE_PCA_TARGET else ""
+        model_filename = os.path.join(config.MODELS_BASE_PATH, f"ridge_mapping_{fmri_model_name}_{model_name}{pca_suffix}_alpha{alpha}.sav")
         os.makedirs(config.MODELS_BASE_PATH, exist_ok=True)
         with open(model_filename, 'wb') as f:
             pickle.dump(ridge, f)
@@ -478,6 +544,11 @@ def predict_embeddings_ridge(ridge_model, X_data):
     if ridge_model is None:
          print("Error: Ridge model is None.")
          return None
+    if X_data.size == 0:
+         print("Warning: Input data for Ridge prediction is empty.")
+         # Determine expected output shape if possible (difficult for Ridge)
+         return np.array([]) # Return empty array
+
     print(f"Predicting embeddings for {X_data.shape[0]} samples using Ridge...")
     try:
         Z_pred = ridge_model.predict(X_data)
@@ -502,25 +573,35 @@ if __name__ == "__main__":
     n_val = 120   # Match logs
     n_test = 50    # Match logs
 
+    # Determine if PCA is used for simulation targets
+    if config.USE_PCA_TARGET:
+        print(f"Simulating with PCA target (n_components={config.PCA_N_COMPONENTS})")
+        dim_target = config.PCA_N_COMPONENTS
+    else:
+        print("Simulating with full embedding target")
+        dim_target = dim_embedding
+
+
     print("Generating simulated data...")
     X_train_sim = np.random.rand(n_train, dim_fmri).astype(np.float32)
     # Simulate some structure: Z ~ X*W + noise
-    W_sim = np.random.randn(dim_fmri, dim_embedding).astype(np.float32) * 0.01
-    Z_train_sim = X_train_sim @ W_sim + np.random.randn(n_train, dim_embedding).astype(np.float32) * 0.1
-    
-    X_val_sim = np.random.rand(n_val, dim_fmri).astype(np.float32)
-    Z_val_sim = X_val_sim @ W_sim + np.random.randn(n_val, dim_embedding).astype(np.float32) * 0.1
-    
-    X_test_sim = np.random.rand(n_test, dim_fmri).astype(np.float32)
-    Z_test_sim = X_test_sim @ W_sim + np.random.randn(n_test, dim_embedding).astype(np.float32) * 0.1 # Ground truth for test simulation
+    W_sim = np.random.randn(dim_fmri, dim_target).astype(np.float32) * 0.01 # Target dimension
+    Z_train_sim = X_train_sim @ W_sim + np.random.randn(n_train, dim_target).astype(np.float32) * 0.1
 
-    print(f"Simulating data for {fmri_model_name} -> {emb_model_name}:")
+    X_val_sim = np.random.rand(n_val, dim_fmri).astype(np.float32)
+    Z_val_sim = X_val_sim @ W_sim + np.random.randn(n_val, dim_target).astype(np.float32) * 0.1
+
+    X_test_sim = np.random.rand(n_test, dim_fmri).astype(np.float32)
+    Z_test_sim = X_test_sim @ W_sim + np.random.randn(n_test, dim_target).astype(np.float32) * 0.1 # Ground truth for test simulation
+
+    print(f"Simulating data for {fmri_model_name} -> {emb_model_name} ({'PCA' if config.USE_PCA_TARGET else 'Full'} Target):")
     print(f"X_train: {X_train_sim.shape}, Z_train: {Z_train_sim.shape}")
     print(f"X_val: {X_val_sim.shape}, Z_val: {Z_val_sim.shape}")
     print(f"X_test: {X_test_sim.shape}, Z_test (true): {Z_test_sim.shape}")
 
     # --- Test MLP ---
     print("\n--- Testing MLP ---")
+    config.MAPPING_MODEL_TYPE="mlp" # Ensure testing uses MLP path
     try:
         # Train MLP
         mlp_model, mlp_path = train_mlp_mapping(
@@ -552,10 +633,11 @@ if __name__ == "__main__":
 
     # --- Test Ridge (Optional comparison) ---
     print("\n--- Testing Ridge (Comparison) ---")
+    config.MAPPING_MODEL_TYPE="ridge" # Ensure testing uses Ridge path
     try:
         # Train Ridge
         ridge_model, ridge_path = train_ridge_mapping(
-            X_train_sim, Z_train_sim,
+            X_train_sim, Z_train_sim, # Train on Z_train_sim (could be PCA or full)
             config.RIDGE_ALPHA, config.RIDGE_MAX_ITER,
             emb_model_name, fmri_model_name # Pass both model names
         )
@@ -571,7 +653,7 @@ if __name__ == "__main__":
                     print(f"Ridge Predicted test embeddings shape: {Z_pred_ridge.shape}")
                     # Evaluate Ridge prediction
                     print("Evaluating Ridge Prediction on Test Set:")
-                    evaluate_prediction(Z_test_sim, Z_pred_ridge, dataset_name="Test")
+                    evaluate_prediction(Z_test_sim, Z_pred_ridge, dataset_name="Test") # Compare against Z_test_sim
             else:
                  print("Ridge loading failed.")
         else:
