@@ -1,6 +1,7 @@
 # config.py
 import torch
 import os
+import numpy as np
 
 # --- Paths ---
 # Adjust these paths based on your Kaggle environment or local setup
@@ -61,6 +62,11 @@ EMBEDDING_MODELS = {
 TARGET_IMAGE_SIZE = 224
 BATCH_SIZE = 64  # Keep moderate for feature extraction RAM
 NUM_WORKERS = 2
+
+
+# --- Mapping Model Diagnostic ---
+USE_PCA_TARGET = True # Set to True to run PCA diagnostic
+PCA_N_COMPONENTS = 256 # Number of principal components to keep (e.g., 128, 256, 512)
 
 # --- Mapping Model (Ridge Regression) ---
 RIDGE_ALPHA = 1000.0
