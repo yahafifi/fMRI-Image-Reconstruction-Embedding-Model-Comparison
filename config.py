@@ -53,9 +53,11 @@ EMBEDDING_MODELS = {
         "embedding_dim": 768 # Output dim of pooler_output
     },
     "clip": {
-        "repo_id": "openai/clip-vit-base-patch16",
-        "preprocessor": "openai/clip-vit-base-patch16",
-        "embedding_dim": 512 # Output dim of image encoder
+        # --- MODIFIED ---
+        "repo_id": "openai/clip-vit-large-patch14", # Changed to Large model
+        "preprocessor": "openai/clip-vit-large-patch14", # Changed preprocessor to match
+        "embedding_dim": 768 # <<<--- UPDATED DIMENSION ---<<<
+        # --- END MODIFIED ---
     }
 }
 TARGET_IMAGE_SIZE = 224
