@@ -24,8 +24,6 @@ IMAGENET256_FEATURES_PATH = os.path.join(OUTPUT_BASE_PATH, 'imagenet256_features
 
 # Other Files
 CLASS_TO_WORDNET_JSON = os.path.join(KAGGLE_BASE_PATH, "class_to_wordnet.json") # From GOD dataset context (keep if GOD uses WordNet IDs)
-# TINY_IMAGENET_WORDS_TXT = os.path.join(TINY_IMAGENET_PATH, "words.txt") # REMOVED
-# TINY_IMAGENET_WNIDS_TXT = os.path.join(TINY_IMAGENET_PATH, "wnids.txt") # REMOVED
 SAVED_KNN_MODELS_PATH = os.path.join(OUTPUT_BASE_PATH, 'knn_models')
 GENERATED_IMAGES_PATH = os.path.join(OUTPUT_BASE_PATH, 'generated_images')
 EVALUATION_RESULTS_PATH = os.path.join(OUTPUT_BASE_PATH, 'evaluation_results')
@@ -37,8 +35,10 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # --- Data Handling ---
 SUBJECT_ID = "3" # Subject for GOD dataset
 ROI = "ROI_VC" # Region of Interest
-TEST_SPLIT_SIZE = 0.1
+TEST_SPLIT_SIZE = 0.1 # Proportion of training data used for validation
 RANDOM_STATE = 42
+MAPPING_BATCH_SIZE = 128 # Batch size specifically for training the mapping model
+MAPPING_NUM_WORKERS = 2
 
 # --- Feature Extraction ---
 EMBEDDING_MODELS = {
@@ -59,38 +59,48 @@ EMBEDDING_MODELS = {
     }
 }
 TARGET_IMAGE_SIZE = 224
-BATCH_SIZE = 64  # Keep moderate for feature extraction RAM
-NUM_WORKERS = 2
+FEATURE_EXTRACTION_BATCH_SIZE = 64  # Batch size for extracting image features
+FEATURE_EXTRACTION_NUM_WORKERS = 2
 
-# --- Mapping Model (Ridge Regression) ---
-RIDGE_ALPHA = 1000.0
-RIDGE_MAX_ITER = 5000
-# --- Suggestion: Add MLP config here later ---
-# MLP_HIDDEN_DIMS = [2048, 2048]
-# MLP_LEARNING_RATE = 1e-4
-# MLP_EPOCHS = 50
-# MLP_WEIGHT_DECAY = 1e-3
-# MLP_DROPOUT = 0.5
+# --- Mapping Model Selection ---
+# Choose 'ridge' or 'mlp'
+MAPPING_MODEL_TYPE = 'mlp' # <--- SELECT MAPPING MODEL HERE
 
+# --- Ridge Regression Config (if MAPPING_MODEL_TYPE='ridge') ---
+RIDGE_ALPHA = 10000.0 # Might need tuning if R2 is poor
+RIDGE_MAX_ITER = 10000 # Increase iterations
+
+# --- Deep Residual SE MLP Config (if MAPPING_MODEL_TYPE='mlp') ---
+MLP_HIDDEN_DIMS = [4096, 4096, 4096, 4096] # Example: Four deep layers, adjust based on VRAM/performance
+MLP_ACTIVATION = torch.nn.GELU # GELU is often good in transformer-like contexts
+MLP_USE_LAYER_NORM = True
+MLP_DROPOUT_RATE = 0.25 # Regularization
+MLP_USE_SE_BLOCK = True
+MLP_SE_REDUCTION = 16 # Squeeze-and-Excitation reduction ratio (common value)
+MLP_LEARNING_RATE = 1e-4 # Starting learning rate
+MLP_WEIGHT_DECAY = 1e-5 # AdamW weight decay
+MLP_EPOCHS = 150 # Number of training epochs (adjust based on convergence)
+MLP_OPTIMIZER = 'AdamW' # AdamW is generally preferred
+MLP_SCHEDULER = 'CosineAnnealingLR' # Learning rate scheduler
+MLP_SCHEDULER_T_MAX = MLP_EPOCHS # T_max for CosineAnnealingLR often set to total epochs
+MLP_EARLY_STOPPING_PATIENCE = 15 # Stop if validation R2 doesn't improve for N epochs
+MLP_GRAD_CLIP_VALUE = 1.0 # Gradient clipping to prevent exploding gradients
 
 # --- Retrieval (k-NN) ---
 KNN_N_NEIGHBORS = 5
 KNN_METRIC = 'cosine' # Cosine is good for embeddings
-KNN_ALGORITHM = 'brute' # Start with brute for correctness, monitor RAM. Change to 'auto' if needed later.
+KNN_ALGORITHM = 'brute' # Start with brute, change to 'auto' or 'hnsw' (requires faiss) if slow/RAM issue
 
 # --- Generation (Stable Diffusion) ---
 STABLE_DIFFUSION_MODEL_ID = "runwayml/stable-diffusion-v1-5"
 STABLE_DIFFUSION_GUIDANCE_SCALE = 7.5
 NUM_GENERATION_SAMPLES = 50 # Generate for all 50 test samples
-# --- Suggestion: Add config for direct embedding guidance later ---
-# SD_GUIDANCE_TYPE = 'text' # or 'embedding'
+NUM_INFERENCE_STEPS = 25 # Diffusion inference steps
 
 # --- Evaluation ---
 EVAL_METRICS = ['ssim', 'clip_sim', 'lpips'] # Add more if needed
 CLIP_SCORE_MODEL_NAME = "ViT-B-32" # For CLIP-based similarity scoring
 CLIP_SCORE_PRETRAINED = "openai"
-# --- Suggestion: Add semantic classification metric ---
-# EVAL_CLASSIFIER_MODEL = "resnet50" # Model to classify generated images
 
 # --- Utility ---
 # Ensure output directories exist
@@ -103,6 +113,9 @@ os.makedirs(GOD_FMRI_PATH, exist_ok=True)
 os.makedirs(GOD_IMAGENET_PATH, exist_ok=True)
 os.makedirs(GOD_FEATURES_PATH, exist_ok=True)
 
+print(f"--- Configuration ---")
 print(f"Using device: {DEVICE}")
 print(f"Output base path: {OUTPUT_BASE_PATH}")
-print(f"Using ImageNet256 path: {IMAGENET256_PATH}") # Added print
+print(f"Using ImageNet256 path: {IMAGENET256_PATH}")
+print(f"Selected Mapping Model: {MAPPING_MODEL_TYPE.upper()}")
+print(f"--------------------")
