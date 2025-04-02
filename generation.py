@@ -225,3 +225,57 @@ if __name__ == "__main__":
         # You would normally save these using the main script's logic
 
     print("\n--- Generation Test Complete ---")
+
+# --- ADD THIS FUNCTION BACK ---
+def save_generated_images(generated_images, ground_truth_paths, model_name, output_dir=config.GENERATED_IMAGES_PATH):
+    """Saves generated images alongside their corresponding ground truth.
+
+    Args:
+        generated_images (list): List of generated PIL Images (or None).
+        ground_truth_paths (list): List of paths to the corresponding ground truth images.
+        model_name (str): Identifier for the model/method (used for subfolder).
+        output_dir (str): Base directory to save images.
+    """
+    if len(generated_images) != len(ground_truth_paths):
+        print(f"Warning: Mismatch between generated images ({len(generated_images)}) and GT paths ({len(ground_truth_paths)}). Cannot save reliably.")
+        # Decide how to handle this - maybe save only the generated ones?
+        # For now, we'll only save if lengths match for paired saving.
+        return # Or adjust logic if you want to save unpaired images
+
+    save_subdir = os.path.join(output_dir, model_name)
+    os.makedirs(save_subdir, exist_ok=True)
+    print(f"Saving generated images to: {save_subdir}")
+
+    saved_count = 0
+    for i, (gen_img, gt_path) in enumerate(zip(generated_images, ground_truth_paths)):
+        if gen_img is None:
+            # print(f"Skipping save for sample {i} as generated image is None.") # Optional print
+            continue
+        if gt_path is None:
+             print(f"Skipping save for sample {i} as ground truth path is None.")
+             continue
+
+        try:
+            # Create filenames
+            # Extract base name safely, handle potential path issues
+            base_gt_name = os.path.splitext(os.path.basename(gt_path))[0]
+            if not base_gt_name: # Handle edge case of invalid path
+                 base_gt_name = f"sample_{i}"
+
+            gen_filename = os.path.join(save_subdir, f"{base_gt_name}_generated_{model_name}.png")
+            gt_filename_copy = os.path.join(save_subdir, f"{base_gt_name}_ground_truth.png") # Save GT as PNG for consistency
+
+            # Save generated image
+            gen_img.save(gen_filename, "PNG")
+
+            # Save copy of ground truth image (convert to RGB first)
+            gt_img_pil = Image.open(gt_path).convert("RGB")
+            gt_img_pil.save(gt_filename_copy, "PNG")
+
+            saved_count += 1
+        except FileNotFoundError:
+             print(f"Error saving image pair for sample {i}: Ground truth file not found at {gt_path}")
+        except Exception as e:
+            print(f"Error saving image pair for sample {i} (GT: {gt_path}): {e}")
+
+    print(f"Saved {saved_count} generated/ground_truth pairs.")
