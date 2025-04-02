@@ -126,7 +126,7 @@ def download_all_data():
     # Warning: Google Drive URLs often expire or change. Need stable links.
     files_to_download = {
         # GOD fMRI Data (Subject 3)
-        "https://figshare.com/ndownloader/files/24080126": os.path.join(config.GOD_FMRI_PATH, f"Subject{config.SUBJECT_ID}.h5"),
+        "https://figshare.com/ndownloader/files/24080120": os.path.join(config.GOD_FMRI_PATH, f"Subject{config.SUBJECT_ID}.h5"),
 
         # GOD ImageNet Stimuli (Zip) - !! VERY LIKELY TO FAIL GDrive link !!
         # Replace with a stable link if possible. Using placeholder URL from script.
