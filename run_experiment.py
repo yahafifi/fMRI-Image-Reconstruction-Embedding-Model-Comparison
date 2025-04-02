@@ -11,7 +11,8 @@ import torch
 
 # Import project modules
 import config # Import config object directly
-# import download_data # Keep if download functionality is needed
+# *** Ensure you have a download_data.py file with a download_all_data function ***
+import download_data
 import data_loading
 import feature_extraction
 import mapping_models # Uses the updated mapping_models.py
@@ -21,9 +22,8 @@ import evaluation
 def main(args):
     """Runs the fMRI decoding experiment using the Advanced MLP for mapping."""
     start_time = time.time()
-    # This now refers ONLY to the embedding model used to get TARGET embeddings (e.g., 'clip')
     embedding_model_name = args.model_name
-    mapping_method = args.mapping_method # 'mlp' or 'ridge'
+    mapping_method = args.mapping_method
 
     print(f"--- Starting Experiment ---")
     print(f"Target Embedding Model: {embedding_model_name.upper()}")
@@ -31,16 +31,30 @@ def main(args):
     print(f"--- Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
 
     # --- 1. Data Download (Optional) ---
-    # if args.download:
-    #     print("\n--- Attempting Data Download ---")
-    #     # Implement or call your download function here
-    #     # if not download_data.download_all_data():
-    #     #     print("Data download/setup failed. Exiting.")
-    #     #     return
-    #     print("Download step skipped (implement download_data.py if needed).")
-    # else:
-    #     print("\n--- Skipping Data Download ---")
-        # Basic checks remain useful
+    # <<< --- REINSTATED DOWNLOAD LOGIC --- >>>
+    if args.download:
+        print("\n--- Attempting Data Download ---")
+        # Ensure download_data.py exists and has download_all_data() function
+        try:
+            if not download_data.download_all_data():
+                print("Data download/setup failed based on download_data script return value. Exiting.")
+                return
+            else:
+                print("Data download/setup step completed.")
+        except AttributeError:
+            print("Error: download_data.py does not have a 'download_all_data' function.")
+            print("Please implement the download logic in download_data.py. Exiting.")
+            return
+        except Exception as download_e:
+            print(f"An error occurred during data download: {download_e}")
+            traceback.print_exc()
+            print("Exiting due to download error.")
+            return
+    else:
+        print("\n--- Skipping Data Download ---")
+    # <<< --- END REINSTATED DOWNLOAD LOGIC --- >>>
+
+    # Basic checks remain useful even after download attempt
     god_fmri_file = os.path.join(config.GOD_FMRI_PATH, f"Subject{config.SUBJECT_ID}.h5")
     god_train_dir = os.path.join(config.GOD_IMAGENET_PATH, "training")
     if not os.path.exists(god_fmri_file): print(f"Warning: GOD fMRI file not found: {god_fmri_file}")
@@ -49,6 +63,8 @@ def main(args):
 
     # --- 2. Load fMRI Data and Prepare Dataloaders ---
     print("\n--- Loading GOD fMRI Data ---")
+    # ... (rest of the main function remains the same as the previous version) ...
+    # ... (Data Loading, Feature Extraction, Mapping Model Train/Load, Prediction, Generation, Evaluation, Visualization) ...
     try:
         handler = data_loading.GodFmriDataHandler(
             subject_id=config.SUBJECT_ID,
@@ -99,7 +115,7 @@ def main(args):
              X_val, Z_val = feature_extraction.extract_features(
                  target_embedding_model, dataloaders['val'], embedding_model_name, config.DEVICE
              )
-             print(f"Extracted Validation features: X={X_val.shape}, Z={Z_val.shape}")
+             print(f"Extracted Validation features: X={X_val.shape if X_val is not None else 'None'}, Z={Z_val.shape if Z_val is not None else 'None'}") # Added safe print
         else: print("No validation set found or loaded.")
 
         if dataloaders.get('test_avg'):
@@ -133,7 +149,7 @@ def main(args):
                 Z_val_np = Z_val if isinstance(Z_val, np.ndarray) and len(Z_val)>0 else None
 
                 mapping_model, saved_path = mapping_models.train_mlp_mapping(
-                    X_train, Z_train, X_val_np, Z_val_np, embedding_model_name, config.DEVICE, config
+                    X_train, Z_train, X_val_np, Z_val_np, embedding_model_name, config.DEVICE, config # Pass config object
                 )
                 if mapping_model is None: raise ValueError("MLP training failed.")
                 mapping_model_filename = saved_path
@@ -142,7 +158,7 @@ def main(args):
                 fmri_dim = X_train.shape[1]
                 embedding_dim = Z_train.shape[1]
                 mapping_model = mapping_models.load_mlp_model(
-                    mapping_model_filename, fmri_dim, embedding_dim, config.DEVICE, config
+                    mapping_model_filename, fmri_dim, embedding_dim, config.DEVICE, config # Pass config
                 )
                 if mapping_model is None: raise FileNotFoundError("Failed to load MLP model.")
 
@@ -182,7 +198,7 @@ def main(args):
                  mapping_model, X_test_avg, config.DEVICE, batch_size=config.MLP_BATCH_SIZE * 2
             )
         elif mapping_method == 'ridge':
-             Z_test_avg_pred_raw = mapping_models.predict_embeddings_ridge(mapping_model, X_test_avg)
+             Z_test_avg_pred_raw = mapping_models.predict_embeddings_ridge(mapping_model, X_test_avg) # Use renamed ridge function
 
         if Z_test_avg_pred_raw is None: raise ValueError(f"{mapping_method.upper()} Prediction failed.")
 
@@ -191,44 +207,39 @@ def main(args):
         pred_rmse, pred_r2 = mapping_models.evaluate_prediction(Z_test_avg_true, Z_test_avg_pred_raw)
         # Calculate Cosine Similarity safely
         cos_sim = np.nan
-        if np.all(np.isfinite(Z_test_avg_true)) and np.all(np.isfinite(Z_test_avg_pred_raw)):
-             norms_true = np.linalg.norm(Z_test_avg_true, axis=1)
-             norms_pred = np.linalg.norm(Z_test_avg_pred_raw, axis=1)
-             valid_indices = (norms_true > 1e-9) & (norms_pred > 1e-9) # Avoid division by zero
-             if np.any(valid_indices):
-                   dot_products = np.sum(Z_test_avg_true[valid_indices] * Z_test_avg_pred_raw[valid_indices], axis=1)
-                   cos_sim_valid = dot_products / (norms_true[valid_indices] * norms_pred[valid_indices])
-                   cos_sim = np.mean(cos_sim_valid)
-                   print(f"Evaluation - Cosine Similarity (avg over valid): {cos_sim:.4f}")
+        if Z_test_avg_true is not None and Z_test_avg_pred_raw is not None and len(Z_test_avg_true) == len(Z_test_avg_pred_raw):
+             if np.all(np.isfinite(Z_test_avg_true)) and np.all(np.isfinite(Z_test_avg_pred_raw)):
+                  norms_true = np.linalg.norm(Z_test_avg_true, axis=1)
+                  norms_pred = np.linalg.norm(Z_test_avg_pred_raw, axis=1)
+                  valid_indices = (norms_true > 1e-9) & (norms_pred > 1e-9) # Avoid division by zero
+                  if np.any(valid_indices):
+                       dot_products = np.sum(Z_test_avg_true[valid_indices] * Z_test_avg_pred_raw[valid_indices], axis=1)
+                       cos_sim_valid = dot_products / (norms_true[valid_indices] * norms_pred[valid_indices])
+                       cos_sim = np.mean(cos_sim_valid)
+                       print(f"Evaluation - Cosine Similarity (avg over valid): {cos_sim:.4f}")
+                  else:
+                       print("Warning: Could not compute cosine similarity (zero vectors or all invalid).")
              else:
-                  print("Warning: Could not compute cosine similarity (zero vectors or all invalid).")
+                 print("Warning: NaN/Inf detected in prediction/truth, skipping cosine similarity calculation.")
         else:
-            print("Warning: NaN/Inf detected, skipping cosine similarity calculation.")
+            print("Warning: Mismatch in truth/prediction data for cosine similarity.")
+
 
         prediction_metrics['rmse_raw'] = pred_rmse
         prediction_metrics['r2_raw'] = pred_r2
         prediction_metrics['cosine_sim_raw'] = cos_sim
 
-        # --- Standardization Adjustment (Decision) ---
-        # Based on previous results showing it harmed Ridge, default to NOT using it.
-        # Can add an argument `args.apply_standardization` if needed for experiments.
+        # --- Standardization Adjustment (Decision: OFF by default) ---
         APPLY_STANDARDIZATION = False
         if APPLY_STANDARDIZATION:
              print("Applying standardization adjustment to predicted embeddings...")
-             epsilon = 1e-9
-             train_mean = np.mean(Z_train, axis=0); train_std = np.std(Z_train, axis=0)
-             pred_mean = np.mean(Z_test_avg_pred_raw, axis=0); pred_std = np.std(Z_test_avg_pred_raw, axis=0)
-             # Add epsilon only to denominator std dev
-             Z_test_avg_pred_adj = ((Z_test_avg_pred_raw - pred_mean) / (pred_std + epsilon)) * train_std + train_mean
-             print("Standardization complete.")
-             # Evaluate adjusted (optional)
-             # adj_pred_rmse, adj_pred_r2 = mapping_models.evaluate_prediction(Z_test_avg_true, Z_test_avg_pred_adj)
-             # prediction_metrics['rmse_adj'] = adj_pred_rmse; prediction_metrics['r2_adj'] = adj_pred_r2
-             query_embeddings = Z_test_avg_pred_adj
-             print("Using *adjusted* predicted embeddings for generation.")
+             # ... (standardization code remains commented out unless enabled) ...
+             # query_embeddings = Z_test_avg_pred_adj
+             # print("Using *adjusted* predicted embeddings for generation.")
+             pass # Placeholder if uncommented
         else:
              print("Skipping standardization adjustment.")
-             query_embeddings = Z_test_avg_pred_raw
+             query_embeddings = Z_test_avg_pred_raw # USE RAW PREDICTIONS
              print("Using RAW predicted embeddings for generation.")
 
 
@@ -263,10 +274,9 @@ def main(args):
             evaluation_pairs = []
             valid_indices_generated = []
             for i, gen_img in enumerate(generated_images_pil):
-                 # Ensure both generated image and corresponding GT path exist
                  if gen_img is not None and i < len(test_avg_gt_paths) and test_avg_gt_paths[i] is not None:
                       evaluation_pairs.append((test_avg_gt_paths[i], gen_img))
-                      valid_indices_generated.append(i) # Track original index of successful pairs
+                      valid_indices_generated.append(i)
 
             if not evaluation_pairs:
                  print("Image generation failed or no valid pairs found.")
@@ -277,7 +287,7 @@ def main(args):
 
                 # --- 9. Save Generated Images ---
                 output_tag = f"{embedding_model_name}_{mapping_method}_direct"
-                generation.save_generated_images(valid_generated_images, valid_gt_paths, output_tag)
+                generation.save_generated_images(valid_generated_images, valid_gt_paths, output_tag) # Use function from generation.py
 
                 # --- 10. Evaluate Reconstructions ---
                 print(f"\n--- Evaluating Reconstructions ({output_tag}) ---")
@@ -285,7 +295,6 @@ def main(args):
                     valid_gt_paths, valid_generated_images, config.EVAL_METRICS
                 )
                 if eval_results_df is not None and not eval_results_df.empty:
-                    # Add original index back for easier comparison
                     eval_results_df['original_test_index'] = valid_indices_generated
                     print("Added 'original_test_index' to evaluation results.")
 
@@ -297,7 +306,7 @@ def main(args):
     # --- 11. Save Evaluation Results ---
     if eval_results_df is not None and not eval_results_df.empty:
          output_tag = f"{embedding_model_name}_{mapping_method}_direct"
-         evaluation.save_evaluation_results(eval_results_df, output_tag)
+         evaluation.save_evaluation_results(eval_results_df, output_tag) # Use function from evaluation.py
     else:
          print("Evaluation resulted in empty DataFrame or generation failed. No final results saved.")
 
@@ -310,14 +319,15 @@ def main(args):
             if num_to_show > 0:
                  try:
                       fig, axes = plt.subplots(num_to_show, 2, figsize=(8, num_to_show * 4))
-                      if num_to_show == 1: axes = np.array([axes])
+                      if num_to_show == 1: axes = np.array([axes]) # Ensure iterable
                       output_tag = f"{embedding_model_name}_{mapping_method}_direct"
                       fig.suptitle(f'Reconstructions ({output_tag})', fontsize=16)
 
                       for i in range(num_to_show):
                           gt_path_viz = valid_gt_paths[i]
                           gen_img_viz = valid_generated_images[i]
-                          original_index = valid_indices_generated[i] # Get index from aligned list
+                          # Get original index from the aligned list
+                          original_index = valid_indices_generated[i]
 
                           try:
                               gt_img_pil = Image.open(gt_path_viz).convert("RGB")
@@ -330,25 +340,17 @@ def main(args):
                               axes[i, 1].axis("off")
                           except Exception as plot_e:
                               print(f"Error plotting sample {i} (Original Index: {original_index}): {plot_e}")
-                              if i < len(axes): # Check array bounds
-                                   if axes.ndim == 1: # Handle case where num_to_show=1
-                                       if i*2 < len(axes): axes[i*2].set_title("Error Plotting")
-                                       if i*2+1 < len(axes): axes[i*2+1].set_title("Error Plotting")
-                                   else:
-                                       axes[i, 0].set_title("Error Plotting")
-                                       axes[i, 1].set_title("Error Plotting")
-                                   # Turn off axes even on error
-                                   if axes.ndim == 1:
-                                       if i*2 < len(axes): axes[i*2].axis("off")
-                                       if i*2+1 < len(axes): axes[i*2+1].axis("off")
-                                   else:
-                                       axes[i,0].axis("off"); axes[i,1].axis("off")
+                              # Safe plotting error handling
+                              ax_row = axes if axes.ndim == 1 else axes[i]
+                              if len(ax_row) > 0: ax_row[0].set_title("Error Plotting GT"); ax_row[0].axis("off")
+                              if len(ax_row) > 1: ax_row[1].set_title("Error Plotting Gen"); ax_row[1].axis("off")
+
 
                       plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout
                       vis_filename = os.path.join(config.EVALUATION_RESULTS_PATH, f"visualization_{output_tag}.png")
                       plt.savefig(vis_filename)
                       print(f"Saved visualization to {vis_filename}")
-                      plt.close(fig) # Close figure to free memory
+                      plt.close(fig) # Close figure
                  except Exception as viz_e:
                       print(f"Error during visualization creation: {viz_e}")
                       traceback.print_exc()
@@ -373,9 +375,12 @@ if __name__ == "__main__":
         "--mapping_method", type=str, default="mlp", choices=['mlp', 'ridge'],
         help="Method used to map fMRI to embeddings ('mlp' or 'ridge')."
     )
-    # parser.add_argument(
-    #     "--download", action="store_true", help="Run the data download step first."
-    # )
+    # <<< --- REINSTATED DOWNLOAD ARGUMENT --- >>>
+    parser.add_argument(
+        "--download", action="store_true",
+        help="Run the data download step first (requires download_data.py)."
+    )
+    # <<< --- END REINSTATED ARGUMENT --- >>>
     parser.add_argument(
         "--force_retrain", action="store_true",
         help="Force retraining of the specified mapping model, even if saved files exist."
@@ -389,20 +394,12 @@ if __name__ == "__main__":
 
     # --- Basic Checks ---
     if args.model_name == 'clip' and config.EMBEDDING_MODELS['clip']['embedding_dim'] != 768:
-         print("Warning: Config specifies CLIP embedding dimension is not 768, but SD v1.5 expects 768. Check config.py.")
-         # Consider exiting or forcing the dimension? For now, just warn.
+         print("CRITICAL WARNING: Config 'clip' embedding dimension is not 768, but SD v1.5 expects 768. Generation will likely fail. Please correct config.py.")
+         # exit() # Optionally exit if critical
 
     if not torch.cuda.is_available():
-        print("Warning: CUDA device not found, using CPU. This will be extremely slow for MLP training and generation.")
-        # Optionally force device to CPU in config if needed, but config setup handles it.
+        print("Warning: CUDA device not found, using CPU. This will be extremely slow.")
     else:
         print(f"Using CUDA Device: {torch.cuda.get_device_name(0)}")
 
     main(args)
-
-    # Example usage from command line:
-    # Run Advanced MLP (default) for CLIP embeddings:
-    # python run_experiment.py --model_name clip --mapping_method mlp --force_retrain --visualize
-
-    # Run Ridge baseline for CLIP embeddings:
-    # python run_experiment.py --model_name clip --mapping_method ridge --force_retrain --visualize
