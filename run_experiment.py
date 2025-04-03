@@ -206,7 +206,7 @@ def main(args):
 
         # --- Choose which predicted embeddings to use for retrieval ---
         # Using the adjusted ones based on original code's likely intent & potential benefit with Ridge
-        query_embeddings = Z_test_avg_pred
+        query_embeddings = Z_test_avg_pred_adj
         print("Using *adjusted* predicted embeddings for retrieval.")
 
     except Exception as e:
